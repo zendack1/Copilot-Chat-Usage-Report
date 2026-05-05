@@ -1,74 +1,140 @@
 <#
 .SYNOPSIS
-    Reports all users who used Copilot Chat (free / unlicensed) in the past 30 days,
-    along with their UPN and total interaction count.
+    Reports all users who used Copilot Chat (free / unlicensed) over a configurable
+    window with engagement tiers, active-day counts, and department breakdowns -
+    actionable data for license-expansion decisions.
 
 .DESCRIPTION
-    Queries the Microsoft 365 Unified Audit Log via the Microsoft Graph
-    auditLogQuery API (no 1,000-row Admin Center cap and no 5,000-row
-    Search-UnifiedAuditLog cap) for "CopilotInteraction" events in the last
-    30 days. Cross-references each active user against assigned licenses to
-    distinguish "free" Copilot Chat usage (no Microsoft 365 Copilot license)
-    from paid M365 Copilot usage.
+    Queries the Microsoft 365 Unified Audit Log via the Microsoft Graph beta
+    'auditLogQuery' API (no 1,000-row Admin Center cap, no 5,000-row
+    Search-UnifiedAuditLog cap) for 'CopilotInteraction' events.
 
-    Output: CSV with one row per user — UPN, DisplayName, InteractionCount,
-    FirstUsed, LastUsed, AppHostsUsed, HasCopilotLicense.
+    Cross-references each active user against assigned licenses to distinguish
+    free Copilot Chat usage from paid Microsoft 365 Copilot usage, and enriches
+    each row with directory properties (department, job title, office) so admins
+    can target conversations by org segment.
+
+    Output:
+      - CSV with one row per user (UPN, interactions, active days, engagement
+        tier, first/last use, app hosts, department, job title, office,
+        license flag).
+      - Self-contained interactive HTML report with KPI tiles, top-20 bar chart,
+        app-host distribution chart, engagement histogram, and a sortable /
+        searchable table.
 
 .PREREQUISITES
-    1. PowerShell 7+
-    2. Microsoft.Graph module:
-         Install-Module Microsoft.Graph -Scope CurrentUser
-       Microsoft.Graph.Beta module (auditLogQuery is currently beta):
+    1. PowerShell 7+ (5.1 works for the script body but ValidateSet behavior
+       differs slightly).
+    2. Modules:
+         Install-Module Microsoft.Graph      -Scope CurrentUser
          Install-Module Microsoft.Graph.Beta -Scope CurrentUser
-    3. The signed-in account must hold one of:
-         - Global Administrator
-         - Global Reader
-         - Security Administrator / Reader
-         - Audit Log Reader
-       AND have consented to these Graph scopes:
-         - AuditLogsQuery.Read.All
-         - User.Read.All
-         - Organization.Read.All
+    3. Delegated runs: signed-in account holds Global Admin / Global Reader /
+       Security Admin / Security Reader / Audit Log Reader, with delegated
+       scopes 'AuditLogsQuery.Read.All', 'User.Read.All',
+       'Organization.Read.All' (consented on first run).
+    4. Unattended runs: app registration with the same three scopes as
+       Application permissions, admin-consented; pass -ClientId, -TenantId,
+       -CertificateThumbprint.
 
 .PARAMETER Days
     Lookback window in days. Must be 30, 60, or 90. Default 30.
 
 .PARAMETER OutputPath
-    Path for the CSV output. Default: .\CopilotChatUsage_<timestamp>.csv
+    Path for the CSV output. Default: .\CopilotChatUsage_<utc-timestamp>_utc.csv
+
+.PARAMETER HtmlPath
+    Path for the HTML report. Defaults to OutputPath with .html extension.
 
 .PARAMETER IncludeLicensed
-    If set, includes users who have a Microsoft 365 Copilot license.
-    By default they are excluded so the report matches the "free Copilot Chat"
-    definition in the Admin Center.
+    Include users who hold a Microsoft 365 Copilot license. By default they
+    are excluded so the result matches the "free Copilot Chat" definition.
+
+.PARAMETER NoHtml
+    Skip HTML report generation; emit CSV only.
+
+.PARAMETER ClientId
+    App-only auth: client (application) id of the registered app. Triggers
+    the AppOnly parameter set; -TenantId and -CertificateThumbprint are also
+    required.
+
+.PARAMETER TenantId
+    App-only auth: tenant id (GUID or domain).
+
+.PARAMETER CertificateThumbprint
+    App-only auth: thumbprint of the certificate stored in CurrentUser\My
+    or LocalMachine\My.
+
+.PARAMETER CopilotSkuPattern
+    Wildcard pattern matched against SkuPartNumber to identify paid Copilot
+    SKUs. Default '*Copilot*' catches Microsoft_365_Copilot, Copilot_Pro,
+    Microsoft_Copilot_for_Sales, Microsoft_Copilot_for_Service, etc.
+
+.PARAMETER QueryTimeoutMinutes
+    How long to wait for the Graph audit query to finish. Default 60.
+
+.PARAMETER RedactTenant
+    Replace the tenant id in the HTML subtitle with '[redacted]' for sharing.
+
+.PARAMETER TestConnection
+    Verify sign-in, scopes, and SKU enumeration without submitting the audit
+    query. Useful before scheduling unattended runs.
+
+.PARAMETER SkipDirectoryEnrichment
+    Skip per-user Get-MgUser lookups. Faster on very large tenants, but the
+    report won't include department, job title, or office location.
 
 .EXAMPLE
     .\Get-CopilotChatUsage.ps1
-    Runs interactively for the last 30 days, excludes licensed Copilot users.
+    Last 30 days, free Copilot Chat users only, CSV + HTML.
 
 .EXAMPLE
-    .\Get-CopilotChatUsage.ps1 -Days 60
-    Runs for the last 60 days.
+    .\Get-CopilotChatUsage.ps1 -Days 90 -IncludeLicensed
+    Every Copilot Chat user (licensed and unlicensed) in the last 90 days.
 
 .EXAMPLE
-    .\Get-CopilotChatUsage.ps1 -Days 90 -IncludeLicensed -OutputPath .\AllCopilotUsers.csv
-    Reports every Copilot Chat user (licensed and unlicensed) in the last 90 days.
+    .\Get-CopilotChatUsage.ps1 -ClientId 'aaaaaaaa-...' -TenantId 'contoso.onmicrosoft.com' -CertificateThumbprint 'AB12...' -Days 30
+    Unattended run for a scheduled task.
+
+.EXAMPLE
+    .\Get-CopilotChatUsage.ps1 -TestConnection
+    Verifies auth, scopes, and SKU access; submits no audit query.
 
 .NOTES
-    For unattended / scheduled runs, replace the Connect-MgGraph call with
-    an app-only connection:
-        Connect-MgGraph -ClientId <appId> -TenantId <tenantId> -CertificateThumbprint <thumb>
-    The app registration needs the application permissions:
-        AuditLogsQuery.Read.All, User.Read.All, Organization.Read.All
+    Audit records can take up to ~30 minutes to surface after the actual
+    interaction, so a run "right now" may slightly under-count today.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Delegated')]
 param(
     [ValidateSet(30, 60, 90)]
     [int]$Days = 30,
-    [string]$OutputPath = ".\CopilotChatUsage_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv",
+
+    [string]$OutputPath = ".\CopilotChatUsage_$((Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmss'))_utc.csv",
+
     [string]$HtmlPath,
+
     [switch]$IncludeLicensed,
-    [switch]$NoHtml
+
+    [switch]$NoHtml,
+
+    [Parameter(ParameterSetName = 'AppOnly', Mandatory)]
+    [string]$ClientId,
+
+    [Parameter(ParameterSetName = 'AppOnly', Mandatory)]
+    [string]$TenantId,
+
+    [Parameter(ParameterSetName = 'AppOnly', Mandatory)]
+    [string]$CertificateThumbprint,
+
+    [string]$CopilotSkuPattern = '*Copilot*',
+
+    [int]$QueryTimeoutMinutes = 60,
+
+    [switch]$RedactTenant,
+
+    [switch]$TestConnection,
+
+    [switch]$SkipDirectoryEnrichment
 )
 
 if (-not $HtmlPath) {
@@ -77,13 +143,7 @@ if (-not $HtmlPath) {
 
 $ErrorActionPreference = 'Stop'
 
-# Microsoft 365 Copilot license SKU part numbers.
-# Add tenant-specific SKUs here if needed (Get-MgSubscribedSku to list).
-$CopilotSkuPartNumbers = @(
-    'Microsoft_365_Copilot',
-    'M365_Copilot',
-    'Microsoft_365_Copilot_for_Business'
-)
+# ---------- Helpers ----------
 
 function Connect-Graph {
     Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan
@@ -92,43 +152,154 @@ function Connect-Graph {
         'User.Read.All',
         'Organization.Read.All'
     )
-    Connect-MgGraph -Scopes $requiredScopes -NoWelcome
-    $ctx = Get-MgContext
-    Write-Host "Connected as $($ctx.Account) to tenant $($ctx.TenantId)" -ForegroundColor Green
+
+    if ($PSCmdlet.ParameterSetName -eq 'AppOnly') {
+        Connect-MgGraph -ClientId $ClientId -TenantId $TenantId `
+            -CertificateThumbprint $CertificateThumbprint -NoWelcome
+        Write-Host "  Connected app-only as $ClientId to tenant $TenantId" -ForegroundColor Green
+    } else {
+        Connect-MgGraph -Scopes $requiredScopes -NoWelcome
+        $ctx = Get-MgContext
+        Write-Host "  Connected as $($ctx.Account) to tenant $($ctx.TenantId)" -ForegroundColor Green
+
+        $missing = $requiredScopes | Where-Object { $_ -notin $ctx.Scopes }
+        if ($missing) {
+            throw "Missing required scopes: $($missing -join ', '). Re-run after consent."
+        }
+    }
+}
+
+function Invoke-GraphWithRetry {
+    param(
+        [string]$Method = 'GET',
+        [Parameter(Mandatory)] [string]$Uri,
+        [object]$Body,
+        [string]$ContentType = 'application/json',
+        [int]$MaxAttempts = 5
+    )
+
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            if ($PSBoundParameters.ContainsKey('Body') -and $Body) {
+                return Invoke-MgGraphRequest -Method $Method -Uri $Uri -Body $Body -ContentType $ContentType
+            } else {
+                return Invoke-MgGraphRequest -Method $Method -Uri $Uri
+            }
+        } catch {
+            $code = 0
+            $retryAfter = 0
+            try {
+                $resp = $_.Exception.Response
+                if ($resp) {
+                    $code = [int]$resp.StatusCode
+                    if ($resp.Headers -and $resp.Headers.Contains('Retry-After')) {
+                        $ra = $resp.Headers.GetValues('Retry-After') | Select-Object -First 1
+                        [void][int]::TryParse($ra, [ref]$retryAfter)
+                    }
+                }
+            } catch { }
+
+            $retryable = $code -in 408, 429, 500, 502, 503, 504
+            if (-not $retryable -or $attempt -ge $MaxAttempts) { throw }
+            $delay = if ($retryAfter -gt 0) { $retryAfter } else { [Math]::Min(60, [Math]::Pow(2, $attempt)) }
+            Write-Verbose "Graph $code on attempt $attempt; sleeping ${delay}s and retrying."
+            Start-Sleep -Seconds $delay
+        }
+    }
 }
 
 function Get-CopilotLicensedUserIds {
-    Write-Host "Identifying users with a Microsoft 365 Copilot license..." -ForegroundColor Cyan
+    param([string]$SkuPattern = '*Copilot*')
+
+    Write-Host "Identifying users with a paid Copilot license (SKU pattern: $SkuPattern)..." -ForegroundColor Cyan
 
     $skus = Get-MgSubscribedSku -All
-    $copilotSkuIds = $skus |
-        Where-Object {
-            $part = $_.SkuPartNumber
-            $CopilotSkuPartNumbers | Where-Object { $part -like "*$_*" }
-        } |
-        Select-Object -ExpandProperty SkuId
+    $matchedSkus = $skus | Where-Object { $_.SkuPartNumber -like $SkuPattern }
 
-    if (-not $copilotSkuIds -or $copilotSkuIds.Count -eq 0) {
-        Write-Host "  No Microsoft 365 Copilot SKUs found in this tenant." -ForegroundColor Yellow
+    if (-not $matchedSkus) {
+        Write-Host "  No paid Copilot SKUs found matching '$SkuPattern' in this tenant." -ForegroundColor Yellow
         return @{}
     }
 
-    Write-Host "  Found $($copilotSkuIds.Count) Copilot SKU(s). Enumerating assigned users..." -ForegroundColor Cyan
+    Write-Host ("  Matched {0} SKU(s):" -f @($matchedSkus).Count) -ForegroundColor Cyan
+    foreach ($s in $matchedSkus) {
+        Write-Host ("    - {0}" -f $s.SkuPartNumber) -ForegroundColor Gray
+    }
 
-    # Key the map by UPN (lowercased) — audit-record UserKey is not reliably the
-    # Entra object id, but UserId in Copilot audit data is the UPN.
     $licensed = @{}
-    foreach ($skuId in $copilotSkuIds) {
+    foreach ($sku in $matchedSkus) {
+        $skuId = $sku.SkuId
         $filter = "assignedLicenses/any(x:x/skuId eq $skuId)"
-        $users = Get-MgUser -Filter $filter -All -Property 'Id,UserPrincipalName' -ConsistencyLevel eventual -CountVariable c
+        $users = Get-MgUser -Filter $filter -All -Property 'Id,UserPrincipalName' `
+            -ConsistencyLevel eventual -CountVariable c
         foreach ($u in $users) {
             if ($u.UserPrincipalName) {
                 $licensed[$u.UserPrincipalName.ToLowerInvariant()] = $u.Id
             }
         }
     }
-    Write-Host "  $($licensed.Count) user(s) currently hold an M365 Copilot license." -ForegroundColor Green
+    Write-Host "  $($licensed.Count) user(s) currently hold a paid Copilot license." -ForegroundColor Green
     return $licensed
+}
+
+function Get-UserDirectoryProperties {
+    param([string[]]$Upns)
+
+    $result = @{}
+    if (-not $Upns -or $Upns.Count -eq 0) { return $result }
+
+    Write-Host ("Enriching {0} user(s) with directory properties..." -f $Upns.Count) -ForegroundColor Cyan
+
+    $batchSize = 15
+    $total = $Upns.Count
+    $processed = 0
+    for ($i = 0; $i -lt $total; $i += $batchSize) {
+        $end = [Math]::Min($i + $batchSize - 1, $total - 1)
+        $batch = $Upns[$i..$end]
+        $quoted = ($batch | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ','
+        $filter = "userPrincipalName in ($quoted)"
+        try {
+            $users = Get-MgUser -Filter $filter -ConsistencyLevel eventual -CountVariable c `
+                -Property 'UserPrincipalName,DisplayName,Department,JobTitle,OfficeLocation' -All
+            foreach ($u in $users) {
+                if ($u.UserPrincipalName) {
+                    $result[$u.UserPrincipalName.ToLowerInvariant()] = [PSCustomObject]@{
+                        DisplayName    = $u.DisplayName
+                        Department     = $u.Department
+                        JobTitle       = $u.JobTitle
+                        OfficeLocation = $u.OfficeLocation
+                    }
+                }
+            }
+        } catch {
+            Write-Warning "Directory lookup failed for batch starting at index $i. Continuing without enrichment for that batch."
+        }
+        $processed += $batch.Count
+        Write-Verbose "  Enriched $processed / $total"
+    }
+    Write-Host "  Resolved directory data for $($result.Count) of $total user(s)." -ForegroundColor Green
+    return $result
+}
+
+function Get-EngagementTier {
+    param([int]$Interactions, [int]$ActiveDays)
+    if ($Interactions -ge 100 -or $ActiveDays -ge 15) { return 'Power' }
+    if ($Interactions -ge 20  -or $ActiveDays -ge 5)  { return 'Regular' }
+    if ($Interactions -ge 2)                          { return 'Casual' }
+    return 'OneTime'
+}
+
+function Get-Median {
+    param([int[]]$Values)
+    if (-not $Values -or $Values.Count -eq 0) { return 0 }
+    $sorted = @($Values | Sort-Object)
+    $n = $sorted.Count
+    if ($n % 2 -eq 0) {
+        return [Math]::Round(($sorted[$n/2 - 1] + $sorted[$n/2]) / 2.0, 1)
+    }
+    return $sorted[[Math]::Floor($n/2)]
 }
 
 function Submit-AuditQuery {
@@ -147,31 +318,34 @@ function Submit-AuditQuery {
         operationFilters     = @('CopilotInteraction')
     } | ConvertTo-Json -Depth 5
 
-    $resp = Invoke-MgGraphRequest -Method POST `
+    $resp = Invoke-GraphWithRetry -Method POST `
         -Uri 'https://graph.microsoft.com/beta/security/auditLog/queries' `
         -Body $body -ContentType 'application/json'
 
-    Write-Host "  Query id: $($resp.id) — status: $($resp.status)" -ForegroundColor Gray
+    Write-Host "  Query id: $($resp.id) - status: $($resp.status)" -ForegroundColor Gray
     return $resp.id
 }
 
 function Wait-AuditQuery {
-    param([string]$QueryId)
+    param(
+        [string]$QueryId,
+        [int]$TimeoutMinutes = 60
+    )
 
-    Write-Host "Waiting for query to complete (this can take several minutes for 30-day windows)..." -ForegroundColor Cyan
-    $deadline = (Get-Date).AddMinutes(60)
+    Write-Host "Waiting for query to complete (up to $TimeoutMinutes min)..." -ForegroundColor Cyan
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     while ((Get-Date) -lt $deadline) {
-        $r = Invoke-MgGraphRequest -Method GET `
+        $r = Invoke-GraphWithRetry -Method GET `
             -Uri "https://graph.microsoft.com/beta/security/auditLog/queries/$QueryId"
         $status = $r.status
-        Write-Host ("  status = {0}" -f $status) -ForegroundColor Gray
+        Write-Verbose ("  status = {0}" -f $status)
         if ($status -eq 'succeeded') { return }
-        if ($status -in 'failed','cancelled') {
+        if ($status -in 'failed', 'cancelled') {
             throw "Audit query ended with status '$status'."
         }
         Start-Sleep -Seconds 30
     }
-    throw "Audit query did not complete within 60 minutes."
+    throw "Audit query did not complete within $TimeoutMinutes minutes."
 }
 
 function Get-AuditQueryRecords {
@@ -183,9 +357,9 @@ function Get-AuditQueryRecords {
     $page = 0
     while ($uri) {
         $page++
-        $r = Invoke-MgGraphRequest -Method GET -Uri $uri
+        $r = Invoke-GraphWithRetry -Method GET -Uri $uri
         if ($r.value) { $all.AddRange([object[]]$r.value) }
-        Write-Host ("  page {0}: {1} records (running total: {2})" -f $page, ($r.value).Count, $all.Count) -ForegroundColor Gray
+        Write-Verbose ("  page {0}: {1} records (running total: {2})" -f $page, ($r.value).Count, $all.Count)
         $uri = $r.'@odata.nextLink'
     }
     Write-Host "  Total audit records retrieved: $($all.Count)" -ForegroundColor Green
@@ -198,32 +372,75 @@ function Write-HtmlReport {
         [Parameter(Mandatory)] [string]$OutPath,
         [Parameter(Mandatory)] [datetime]$StartUtc,
         [Parameter(Mandatory)] [datetime]$EndUtc,
-        [switch]$IncludeLicensed
+        [switch]$IncludeLicensed,
+        [switch]$RedactTenant
     )
 
     $rowsArray = @($Rows)
     $totalUsers  = $rowsArray.Count
     $totalEvents = ($rowsArray | Measure-Object InteractionCount -Sum).Sum
     if (-not $totalEvents) { $totalEvents = 0 }
-    $licCount    = ($rowsArray | Where-Object HasCopilotLicense).Count
-    $unlicCount  = $totalUsers - $licCount
+    $avgPerUser  = if ($totalUsers) { [Math]::Round($totalEvents / $totalUsers, 1) } else { 0 }
+    $medianPerUser = Get-Median -Values @($rowsArray | ForEach-Object { [int]$_.InteractionCount })
 
-    $generatedAt = (Get-Date).ToString('u')
-    $tenant      = (Get-MgContext).TenantId
-    $scopeText   = if ($IncludeLicensed) { 'All Copilot Chat users (licensed and unlicensed)' } else { 'Free / unlicensed Copilot Chat users only' }
+    # Engagement histogram buckets.
+    $tierCounts = @{
+        Power   = 0
+        Regular = 0
+        Casual  = 0
+        OneTime = 0
+    }
+    foreach ($r in $rowsArray) { $tierCounts[$r.EngagementTier]++ }
+    $tiers = @(
+        @{ key = 'Power';   label = 'Power (100+ events or 15+ active days)'; count = $tierCounts.Power },
+        @{ key = 'Regular'; label = 'Regular (20-99 events or 5-14 days)';    count = $tierCounts.Regular },
+        @{ key = 'Casual';  label = 'Casual (2-19 events)';                   count = $tierCounts.Casual },
+        @{ key = 'OneTime'; label = 'One-time (1 event)';                     count = $tierCounts.OneTime }
+    )
 
-    # Embed data as JSON for client-side sort/filter.
+    # App host distribution (count distinct users per host).
+    $hostCounts = @{}
+    foreach ($r in $rowsArray) {
+        if ($r.AppHostsUsed) {
+            foreach ($h in $r.AppHostsUsed.Split(';')) {
+                $h = $h.Trim()
+                if ($h) {
+                    if (-not $hostCounts.ContainsKey($h)) { $hostCounts[$h] = 0 }
+                    $hostCounts[$h]++
+                }
+            }
+        }
+    }
+    $hosts = @(
+        $hostCounts.GetEnumerator() |
+            Sort-Object Value -Descending |
+            ForEach-Object { @{ label = $_.Key; count = $_.Value } }
+    )
+
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('u')
+    $tenant      = if ($RedactTenant) { '[redacted]' } else { (Get-MgContext).TenantId }
+    $scopeText   = if ($IncludeLicensed) {
+        'All Copilot Chat users (licensed and unlicensed)'
+    } else {
+        'Free / unlicensed Copilot Chat users only'
+    }
+    $titleRange  = "$($StartUtc.ToString('yyyy-MM-dd')) to $($EndUtc.ToString('yyyy-MM-dd'))"
+
     $payload = @{
-        rows           = $rowsArray
-        startUtc       = $StartUtc.ToString('u')
-        endUtc         = $EndUtc.ToString('u')
-        generatedAt    = $generatedAt
-        tenantId       = $tenant
-        scopeText      = $scopeText
-        totalUsers     = $totalUsers
-        totalEvents    = $totalEvents
-        licensedCount  = $licCount
-        unlicensedCount = $unlicCount
+        rows            = $rowsArray
+        startUtc        = $StartUtc.ToString('u')
+        endUtc          = $EndUtc.ToString('u')
+        generatedAt     = $generatedAt
+        tenantId        = $tenant
+        scopeText       = $scopeText
+        totalUsers      = $totalUsers
+        totalEvents     = $totalEvents
+        avgPerUser      = $avgPerUser
+        medianPerUser   = $medianPerUser
+        tiers           = $tiers
+        hosts           = $hosts
+        titleRange      = $titleRange
+        includeLicensed = [bool]$IncludeLicensed
     } | ConvertTo-Json -Depth 6 -Compress
 
     $template = @'
@@ -231,13 +448,14 @@ function Write-HtmlReport {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Copilot Chat Usage Report</title>
+<title>Copilot Chat Usage Report - __TITLE_RANGE__</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#1f2328; --muted:#5b6573;
     --accent:#0f6cbd; --accent-2:#2899f5; --border:#e3e6ec;
     --good:#107c10; --warn:#a47100;
+    --power:#0f6cbd; --regular:#2899f5; --casual:#7fb3e0; --onetime:#c5d8ec;
   }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -247,21 +465,26 @@ function Write-HtmlReport {
   header h1 { margin:0 0 4px; font-size:22px; font-weight:600; letter-spacing:-.01em; }
   header .sub { font-size:13px; opacity:.9; }
   main { max-width:1280px; margin:0 auto; padding:24px 32px 64px; }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
           gap:16px; margin-bottom:24px; }
   .kpi { background:var(--card); border:1px solid var(--border); border-radius:8px;
          padding:16px 20px; }
   .kpi .label { font-size:12px; color:var(--muted); text-transform:uppercase;
                 letter-spacing:.04em; margin-bottom:6px; }
-  .kpi .value { font-size:28px; font-weight:600; letter-spacing:-.02em; }
+  .kpi .value { font-size:26px; font-weight:600; letter-spacing:-.02em; }
   .panel { background:var(--card); border:1px solid var(--border); border-radius:8px;
            padding:20px 24px; margin-bottom:20px; }
   .panel h2 { margin:0 0 12px; font-size:15px; font-weight:600; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width:880px) { .grid-2 { grid-template-columns:1fr; } }
   .controls { display:flex; gap:12px; align-items:center; margin-bottom:12px;
               flex-wrap:wrap; }
   .controls input[type=search] { flex:1; min-width:200px; padding:8px 12px;
               border:1px solid var(--border); border-radius:6px; font:inherit; }
   .controls .count { color:var(--muted); font-size:13px; }
+  .btn { padding:8px 12px; border:1px solid var(--border); background:#fff;
+         border-radius:6px; cursor:pointer; font:inherit; }
+  .btn:hover { background:#f5f8fc; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border);
            vertical-align:top; }
@@ -275,20 +498,39 @@ function Write-HtmlReport {
   td.num { text-align:right; font-variant-numeric: tabular-nums; }
   .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
           background:#eef4fb; color:var(--accent); }
-  .pill.lic { background:#fef6e7; color:var(--warn); }
+  .pill.tier-Power   { background:#dbe9f7; color:#0f4a82; }
+  .pill.tier-Regular { background:#e8f1fa; color:#0f6cbd; }
+  .pill.tier-Casual  { background:#f2f6fb; color:#445a73; }
+  .pill.tier-OneTime { background:#fbf4e8; color:#a47100; }
   .bar-chart { display:grid; gap:6px; }
-  .bar-row { display:grid; grid-template-columns:240px 1fr 60px; gap:8px;
-             align-items:center; font-size:12px; }
+  .bar-row { display:grid; grid-template-columns:240px 1fr 80px;
+             gap:8px; align-items:center; font-size:12px; }
   .bar-row .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .bar-row .num  { text-align:right; font-variant-numeric: tabular-nums; color:var(--muted); }
   .bar { height:14px; background:linear-gradient(90deg,var(--accent),var(--accent-2));
          border-radius:4px; }
-  footer { color:var(--muted); font-size:12px; margin-top:24px; }
+  .bar.tier-Power   { background:var(--power); }
+  .bar.tier-Regular { background:var(--regular); }
+  .bar.tier-Casual  { background:var(--casual); }
+  .bar.tier-OneTime { background:var(--onetime); }
+  footer { color:var(--muted); font-size:12px; margin-top:24px; line-height:1.6; }
+  footer .note { background:#fff8e6; border:1px solid #f1d99a; color:#7c5a17;
+                 padding:8px 12px; border-radius:6px; margin-bottom:8px; }
   .muted { color:var(--muted); }
   .empty { padding:40px; text-align:center; color:var(--muted); }
   @media (max-width:640px) {
-    .bar-row { grid-template-columns:140px 1fr 50px; }
+    .bar-row { grid-template-columns:140px 1fr 60px; }
     main { padding:16px; }
+  }
+  @media print {
+    body { background:#fff; }
+    header { background:#0f6cbd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .panel, .kpi { break-inside:avoid; box-shadow:none; }
+    .controls .btn, #csv-btn { display:none; }
+    main { max-width:none; padding:12px; }
+    table { font-size:11px; }
+    th { position:static; }
+    .table-wrap { max-height:none !important; overflow:visible !important; border:none !important; }
   }
 </style>
 </head>
@@ -302,6 +544,19 @@ function Write-HtmlReport {
     <div class="kpi"><div class="label">Users</div><div class="value" id="kpi-users">0</div></div>
     <div class="kpi"><div class="label">Total interactions</div><div class="value" id="kpi-events">0</div></div>
     <div class="kpi"><div class="label">Avg / user</div><div class="value" id="kpi-avg">0</div></div>
+    <div class="kpi"><div class="label">Median / user</div><div class="value" id="kpi-median">0</div></div>
+  </section>
+
+  <section class="grid-2">
+    <div class="panel">
+      <h2>Engagement tiers</h2>
+      <div class="bar-chart" id="tier-chart"></div>
+    </div>
+    <div class="panel">
+      <h2>App host distribution</h2>
+      <div class="bar-chart" id="host-chart"></div>
+      <div id="host-empty" class="empty" style="display:none">No app host data.</div>
+    </div>
   </section>
 
   <section class="panel">
@@ -313,16 +568,20 @@ function Write-HtmlReport {
   <section class="panel">
     <h2>All users</h2>
     <div class="controls">
-      <input type="search" id="filter" placeholder="Filter by UPN or app host…">
+      <input type="search" id="filter" placeholder="Filter by UPN, app host, department, tier...">
       <span class="count" id="count"></span>
-      <button id="csv-btn" type="button" style="padding:8px 12px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer;">Download CSV</button>
+      <button id="csv-btn" class="btn" type="button">Download CSV (filtered)</button>
     </div>
-    <div style="max-height:560px;overflow:auto;border:1px solid var(--border);border-radius:6px;">
+    <div class="table-wrap" style="max-height:560px;overflow:auto;border:1px solid var(--border);border-radius:6px;">
       <table id="tbl">
         <thead>
           <tr>
             <th data-key="UserPrincipalName">User Principal Name</th>
-            <th data-key="InteractionCount" class="num">Interactions</th>
+            <th data-key="EngagementTier">Tier</th>
+            <th data-key="InteractionCount" class="num">Events</th>
+            <th data-key="ActiveDays" class="num">Active days</th>
+            <th data-key="Department">Department</th>
+            <th data-key="JobTitle">Job title</th>
             <th data-key="FirstUsedUtc">First used (UTC)</th>
             <th data-key="LastUsedUtc">Last used (UTC)</th>
             <th data-key="AppHostsUsed">App hosts</th>
@@ -333,7 +592,13 @@ function Write-HtmlReport {
     </div>
   </section>
 
-  <footer id="foot"></footer>
+  <footer id="foot">
+    <div class="note">
+      Audit records can take up to ~30 minutes to surface. Activity in the last
+      30 minutes of the window may be under-counted.
+    </div>
+    <div id="foot-text"></div>
+  </footer>
 </main>
 
 <script id="report-data" type="application/json">__DATA_JSON__</script>
@@ -343,31 +608,47 @@ function Write-HtmlReport {
   const rows = (data.rows || []).slice();
 
   const fmt = n => (n==null) ? '' : Number(n).toLocaleString();
-  const subtitle = `${data.scopeText} • ${data.startUtc} → ${data.endUtc} • Tenant ${data.tenantId}`;
+  const subtitle = `${data.scopeText} - ${data.startUtc} -> ${data.endUtc} - Tenant ${data.tenantId}`;
   document.getElementById('sub').textContent = subtitle;
 
   document.getElementById('kpi-users').textContent  = fmt(data.totalUsers);
   document.getElementById('kpi-events').textContent = fmt(data.totalEvents);
-  const avg = data.totalUsers ? Math.round(data.totalEvents / data.totalUsers) : 0;
-  document.getElementById('kpi-avg').textContent    = fmt(avg);
+  document.getElementById('kpi-avg').textContent    = fmt(data.avgPerUser);
+  document.getElementById('kpi-median').textContent = fmt(data.medianPerUser);
 
-  // Bar chart - top 20.
-  const top = rows.slice().sort((a,b)=>b.InteractionCount-a.InteractionCount).slice(0,20);
-  const max = top.length ? top[0].InteractionCount : 0;
-  const chart = document.getElementById('chart');
-  if (!top.length) {
-    document.getElementById('chart-empty').style.display='block';
-  } else {
-    top.forEach(r => {
-      const pct = max ? (r.InteractionCount / max * 100) : 0;
-      const row = document.createElement('div');
-      row.className = 'bar-row';
-      row.innerHTML =
-        `<div class="name" title="${r.UserPrincipalName}">${r.UserPrincipalName}</div>` +
-        `<div><div class="bar" style="width:${pct}%"></div></div>` +
-        `<div class="num">${fmt(r.InteractionCount)}</div>`;
-      chart.appendChild(row);
-    });
+  function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+  function renderBars(containerId, items, options){
+    options = options || {};
+    const max = items.length ? items.reduce((m,i)=>Math.max(m, i.count||0), 0) : 0;
+    const el = document.getElementById(containerId);
+    if (!items.length) { return false; }
+    el.innerHTML = items.map(i => {
+      const pct = max ? ((i.count||0) / max * 100) : 0;
+      let cls = 'bar';
+      if (options.tierKey) { cls += ' tier-' + options.tierKey(i); }
+      return `<div class="bar-row">` +
+        `<div class="name" title="${escapeHtml(i.label)}">${escapeHtml(i.label)}</div>` +
+        `<div><div class="${cls}" style="width:${pct}%"></div></div>` +
+        `<div class="num">${fmt(i.count)}</div>` +
+        `</div>`;
+    }).join('');
+    return true;
+  }
+
+  // Engagement tier chart.
+  renderBars('tier-chart', data.tiers || [], { tierKey: i => i.key });
+
+  // App host distribution.
+  if (!renderBars('host-chart', data.hosts || [])) {
+    document.getElementById('host-empty').style.display = 'block';
+  }
+
+  // Top-20 users.
+  const top = rows.slice().sort((a,b)=>b.InteractionCount-a.InteractionCount).slice(0,20)
+    .map(r => ({ label: r.UserPrincipalName, count: r.InteractionCount }));
+  if (!renderBars('chart', top)) {
+    document.getElementById('chart-empty').style.display = 'block';
   }
 
   // Table.
@@ -376,53 +657,72 @@ function Write-HtmlReport {
   const countEl = document.getElementById('count');
   let sortKey = 'InteractionCount';
   let sortAsc = false;
+  let currentView = rows.slice();
 
-  function render() {
+  function tierBadge(t){
+    const safe = String(t||'').replace(/[^A-Za-z]/g,'');
+    return `<span class="pill tier-${safe}">${escapeHtml(t||'')}</span>`;
+  }
+
+  function applyFilter() {
     const q = filter.value.trim().toLowerCase();
     let view = rows;
     if (q) {
       view = rows.filter(r =>
         (r.UserPrincipalName||'').toLowerCase().includes(q) ||
-        (r.AppHostsUsed||'').toLowerCase().includes(q)
+        (r.AppHostsUsed||'').toLowerCase().includes(q) ||
+        (r.Department||'').toLowerCase().includes(q) ||
+        (r.JobTitle||'').toLowerCase().includes(q) ||
+        (r.EngagementTier||'').toLowerCase().includes(q)
       );
     }
-    view = view.slice().sort((a,b)=>{
+    return view.slice().sort((a,b)=>{
       let av=a[sortKey], bv=b[sortKey];
       if (typeof av==='string') av=av.toLowerCase();
       if (typeof bv==='string') bv=bv.toLowerCase();
+      if (av==null) av = (typeof bv==='number') ? -Infinity : '';
+      if (bv==null) bv = (typeof av==='number') ? -Infinity : '';
       if (av<bv) return sortAsc?-1:1;
       if (av>bv) return sortAsc?1:-1;
       return 0;
     });
-    tbody.innerHTML = view.map(r => `
+  }
+
+  function render() {
+    currentView = applyFilter();
+    tbody.innerHTML = currentView.map(r => `
       <tr>
         <td>${escapeHtml(r.UserPrincipalName||'')}</td>
+        <td>${tierBadge(r.EngagementTier)}</td>
         <td class="num">${fmt(r.InteractionCount)}</td>
+        <td class="num">${fmt(r.ActiveDays)}</td>
+        <td>${escapeHtml(r.Department||'')}</td>
+        <td>${escapeHtml(r.JobTitle||'')}</td>
         <td>${escapeHtml(r.FirstUsedUtc||'')}</td>
         <td>${escapeHtml(r.LastUsedUtc||'')}</td>
         <td>${escapeHtml(r.AppHostsUsed||'')}</td>
       </tr>`).join('');
-    countEl.textContent = `${fmt(view.length)} of ${fmt(rows.length)} shown`;
+    countEl.textContent = `${fmt(currentView.length)} of ${fmt(rows.length)} shown`;
     document.querySelectorAll('th').forEach(th => {
       th.classList.toggle('sorted', th.dataset.key===sortKey);
       th.classList.toggle('asc', th.dataset.key===sortKey && sortAsc);
     });
   }
-  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
   document.querySelectorAll('th[data-key]').forEach(th => {
     th.addEventListener('click', () => {
       const k = th.dataset.key;
+      const stringCols = new Set(['UserPrincipalName','AppHostsUsed','Department','JobTitle','EngagementTier','FirstUsedUtc','LastUsedUtc']);
       if (k===sortKey) sortAsc = !sortAsc;
-      else { sortKey = k; sortAsc = (k==='UserPrincipalName' || k==='AppHostsUsed'); }
+      else { sortKey = k; sortAsc = stringCols.has(k); }
       render();
     });
   });
   filter.addEventListener('input', render);
 
   document.getElementById('csv-btn').addEventListener('click', () => {
-    const cols = ['UserPrincipalName','UserId','InteractionCount','FirstUsedUtc','LastUsedUtc','AppHostsUsed'];
-    const csv = [cols.join(',')].concat(rows.map(r =>
+    const cols = ['UserPrincipalName','UserId','EngagementTier','InteractionCount','ActiveDays','Department','JobTitle','OfficeLocation','FirstUsedUtc','LastUsedUtc','AppHostsUsed'];
+    const csv = [cols.join(',')].concat(currentView.map(r =>
       cols.map(c => {
         const v = r[c]==null ? '' : String(r[c]);
         return /[,"\n]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v;
@@ -431,11 +731,12 @@ function Write-HtmlReport {
     const blob = new Blob([csv],{type:'text/csv;charset=utf-8'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'CopilotChatUsage.csv';
+    a.download = 'CopilotChatUsage_filtered.csv';
     a.click();
   });
 
-  document.getElementById('foot').textContent = `Generated ${data.generatedAt} • ${fmt(rows.length)} users • ${fmt(data.totalEvents)} interactions`;
+  document.getElementById('foot-text').textContent =
+    `Generated ${data.generatedAt} - ${fmt(rows.length)} users - ${fmt(data.totalEvents)} interactions`;
 
   render();
 })();
@@ -444,9 +745,9 @@ function Write-HtmlReport {
 </html>
 '@
 
-    # Inject the JSON payload safely (no broken </script> sequences in data).
+    # Inject the JSON payload safely.
     $safe = $payload -replace '</', '<\/'
-    $html = $template.Replace('__DATA_JSON__', $safe)
+    $html = $template.Replace('__DATA_JSON__', $safe).Replace('__TITLE_RANGE__', $titleRange)
 
     Set-Content -Path $OutPath -Value $html -Encoding UTF8
 }
@@ -455,13 +756,22 @@ function Write-HtmlReport {
 
 Connect-Graph
 
+if ($TestConnection) {
+    Write-Host ""
+    Write-Host "Test-connection mode:" -ForegroundColor Cyan
+    $null = Get-CopilotLicensedUserIds -SkuPattern $CopilotSkuPattern
+    Write-Host ""
+    Write-Host "Connection test passed. All required permissions are in place." -ForegroundColor Green
+    return
+}
+
 $endUtc   = (Get-Date).ToUniversalTime()
 $startUtc = $endUtc.AddDays(-1 * $Days)
 
-$licensedMap = if ($IncludeLicensed) { @{} } else { Get-CopilotLicensedUserIds }
+$licensedMap = if ($IncludeLicensed) { @{} } else { Get-CopilotLicensedUserIds -SkuPattern $CopilotSkuPattern }
 
 $queryId = Submit-AuditQuery -Start $startUtc -End $endUtc
-Wait-AuditQuery -QueryId $queryId
+Wait-AuditQuery -QueryId $queryId -TimeoutMinutes $QueryTimeoutMinutes
 $records = Get-AuditQueryRecords -QueryId $queryId
 
 if ($records.Count -eq 0) {
@@ -471,7 +781,6 @@ if ($records.Count -eq 0) {
 
 Write-Host "Aggregating per-user interaction counts..." -ForegroundColor Cyan
 
-# auditData payload structure varies; pull the most useful fields defensively.
 $rows = foreach ($rec in $records) {
     $data = $rec.auditData
     if ($data -is [string]) {
@@ -479,20 +788,27 @@ $rows = foreach ($rec in $records) {
     }
 
     $upn      = $data.UserId
-    $userKey  = $data.UserKey         # AAD object id when present
+    $userKey  = $data.UserKey
     $appHost  = $data.CopilotEventData.AppHost
     if (-not $appHost) { $appHost = $data.AppHost }
     $created  = $rec.createdDateTime
     if (-not $created) { $created = $data.CreationTime }
 
+    $timestamp = $null
+    if ($created) {
+        try { $timestamp = [datetime]$created } catch { $timestamp = $null }
+    }
+    if (-not $timestamp) { continue }
+
     [PSCustomObject]@{
         Upn       = $upn
         UserId    = $userKey
         AppHost   = $appHost
-        TimeStamp = [datetime]$created
+        TimeStamp = $timestamp
     }
 }
 
+# Group by UPN to compute per-user metrics.
 $grouped = $rows |
     Where-Object { $_.Upn } |
     Group-Object -Property Upn |
@@ -504,15 +820,24 @@ $grouped = $rows |
         $uid    = ($g.Group | Where-Object UserId | Select-Object -First 1).UserId
         $upnKey = $g.Name.ToLowerInvariant()
         $hasLic = $licensedMap.ContainsKey($upnKey)
+        $activeDays = @($g.Group.TimeStamp | ForEach-Object { $_.ToUniversalTime().Date } |
+                        Sort-Object -Unique).Count
+        $tier = Get-EngagementTier -Interactions $g.Count -ActiveDays $activeDays
 
         [PSCustomObject]@{
             UserPrincipalName  = $g.Name
             UserId             = $uid
             InteractionCount   = $g.Count
+            ActiveDays         = $activeDays
+            EngagementTier     = $tier
             FirstUsedUtc       = $first.ToString('u')
             LastUsedUtc        = $last.ToString('u')
             AppHostsUsed       = $hosts
             HasCopilotLicense  = $hasLic
+            DisplayName        = $null
+            Department         = $null
+            JobTitle           = $null
+            OfficeLocation     = $null
         }
     }
 
@@ -520,7 +845,22 @@ if (-not $IncludeLicensed) {
     $grouped = $grouped | Where-Object { -not $_.HasCopilotLicense }
 }
 
-$grouped = $grouped | Sort-Object InteractionCount -Descending
+$grouped = @($grouped | Sort-Object InteractionCount -Descending)
+
+# Directory enrichment.
+if (-not $SkipDirectoryEnrichment -and $grouped.Count -gt 0) {
+    $dirMap = Get-UserDirectoryProperties -Upns ($grouped.UserPrincipalName)
+    foreach ($g in $grouped) {
+        $key = $g.UserPrincipalName.ToLowerInvariant()
+        if ($dirMap.ContainsKey($key)) {
+            $info = $dirMap[$key]
+            $g.DisplayName    = $info.DisplayName
+            $g.Department     = $info.Department
+            $g.JobTitle       = $info.JobTitle
+            $g.OfficeLocation = $info.OfficeLocation
+        }
+    }
+}
 
 $grouped | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
 
@@ -530,7 +870,8 @@ if (-not $NoHtml) {
                      -OutPath $HtmlPath `
                      -StartUtc $startUtc `
                      -EndUtc $endUtc `
-                     -IncludeLicensed:$IncludeLicensed
+                     -IncludeLicensed:$IncludeLicensed `
+                     -RedactTenant:$RedactTenant
 }
 
 Write-Host ""

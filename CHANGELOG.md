@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-05-05
+
+### Added
+- **App-only / unattended auth path**: new `-ClientId`, `-TenantId`, and
+  `-CertificateThumbprint` parameters (parameter set `AppOnly`, all mandatory
+  together) for scheduled-task runs without an interactive sign-in.
+- **`-TestConnection` switch**: verifies sign-in, granted scopes, and SKU
+  enumeration without submitting an audit query — useful for validating an
+  app registration before scheduling.
+- **`-CopilotSkuPattern` parameter** (default `*Copilot*`): replaces the
+  prior hardcoded SKU list. Future Copilot SKUs are picked up automatically
+  as long as their `SkuPartNumber` contains "Copilot".
+- **`-QueryTimeoutMinutes` parameter** (default 60): configurable wait for
+  the Graph audit query to finish, so long-running queries on big tenants
+  don't time out at a fixed boundary.
+- **`-RedactTenant` switch**: replaces the tenant id in the HTML subtitle
+  with `[redacted]` — safe to share screenshots externally.
+- **`-SkipDirectoryEnrichment` switch**: skip per-user `Get-MgUser` lookups.
+  Faster on very large tenants at the cost of empty department / job-title /
+  office columns.
+- **Engagement tier classification** (`Power` / `Regular` / `Casual` /
+  `OneTime`) — combined event-count + active-day rule, surfacing the high-
+  value population for license-expansion decisions instead of a flat list.
+- **Active-day metric**: distinct UTC dates per user, in addition to the raw
+  event count.
+- **Directory enrichment** via batched `Get-MgUser` (15 UPNs per request):
+  adds `DisplayName`, `Department`, `JobTitle`, and `OfficeLocation` columns
+  to the CSV.
+- **Median interactions / user** alongside the existing average — robust
+  central-tendency signal when a few power users skew the mean.
+- **App-host distribution chart** in the HTML: which surfaces (Bing, Teams,
+  M365App, Edge, etc.) are driving Copilot Chat usage.
+- **Engagement-tier histogram** in the HTML.
+- **Filtered CSV download** in the HTML report — the in-browser table filter
+  feeds a client-side CSV export, so admins can slice by department / tier /
+  app host without re-running the script.
+- **Print stylesheet** in the HTML report — prints cleanly to PDF for
+  distribution; non-printing controls are hidden.
+- **Latency disclaimer** banner in the HTML footer ("audit records can take
+  up to ~30 minutes to surface").
+- **Title date range** in `<title>` and HTML subtitle.
+- **Graph retry wrapper** (`Invoke-GraphWithRetry`): exponential backoff on
+  408 / 429 / 5xx with `Retry-After` header honoring. All audit-query and
+  paging requests now go through it.
+
+### Changed
+- Default `OutputPath` filename now stamps the **UTC** time (not local), and
+  the suffix `_utc.csv` makes the timezone explicit.
+- License-map keying clarified to lower-cased UPN throughout (audit payloads
+  may differ in case from directory entries).
+- Page-status output for audit-record paging moved to `Write-Verbose` so the
+  default console output stays clean.
+
+### Fixed
+- Guard against null / unparseable `createdDateTime` values in audit records:
+  rows with no usable timestamp are now skipped instead of throwing during
+  the `[datetime]` cast.
+
+### Notes
+- Existing `-Days`, `-OutputPath`, `-HtmlPath`, `-IncludeLicensed`, and
+  `-NoHtml` parameters are unchanged. Existing CSVs from v1.0.0 will load in
+  the v1.1.0 HTML viewer, but the new columns will be empty.
+
 ## [1.0.0] - 2026-05-05
 
 ### Added
