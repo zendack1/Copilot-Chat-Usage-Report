@@ -7,7 +7,7 @@ Each run produces:
 - a **CSV** with one row per user (UPN, interaction count, active-day count, engagement tier, first/last use, surfaces used, department, job title, office)
 - a **self-contained interactive HTML report** with KPI tiles (users / total / avg / median), an engagement-tier histogram, an app-host distribution chart, a Top-20 bar chart, and a sortable / searchable / printable table — opens by double-clicking, no server, no internet, no dependencies
 
-*See [`examples/mock_report.html`](examples/mock_report.html) for a sample.*
+*See [`mock_report.html`](mock_report.html) for a sample.*
 
 ---
 
@@ -38,7 +38,7 @@ It then cross-references each active user against assigned licenses and (by defa
 ## Quick start
 
 ```powershell
-git clone https://github.com/<your-handle>/copilot-chat-usage-report.git
+git clone https://github.com/zendack1/copilot-chat-usage-report.git
 cd copilot-chat-usage-report
 .\Get-CopilotChatUsage.ps1
 ```
