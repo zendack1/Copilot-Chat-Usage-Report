@@ -72,9 +72,6 @@
 .PARAMETER QueryTimeoutMinutes
     How long to wait for the Graph audit query to finish. Default 60.
 
-.PARAMETER RedactTenant
-    Replace the tenant id in the HTML subtitle with '[redacted]' for sharing.
-
 .PARAMETER TestConnection
     Verify sign-in, scopes, and SKU enumeration without submitting the audit
     query. Useful before scheduling unattended runs.
@@ -129,8 +126,6 @@ param(
     [string]$CopilotSkuPattern = '*Copilot*',
 
     [int]$QueryTimeoutMinutes = 60,
-
-    [switch]$RedactTenant,
 
     [switch]$TestConnection,
 
@@ -372,8 +367,7 @@ function Write-HtmlReport {
         [Parameter(Mandatory)] [string]$OutPath,
         [Parameter(Mandatory)] [datetime]$StartUtc,
         [Parameter(Mandatory)] [datetime]$EndUtc,
-        [switch]$IncludeLicensed,
-        [switch]$RedactTenant
+        [switch]$IncludeLicensed
     )
 
     $rowsArray = @($Rows)
@@ -418,7 +412,6 @@ function Write-HtmlReport {
     )
 
     $generatedAt = (Get-Date).ToUniversalTime().ToString('u')
-    $tenant      = if ($RedactTenant) { '[redacted]' } else { (Get-MgContext).TenantId }
     $scopeText   = if ($IncludeLicensed) {
         'All Copilot Chat users (licensed and unlicensed)'
     } else {
@@ -431,7 +424,6 @@ function Write-HtmlReport {
         startUtc        = $StartUtc.ToString('u')
         endUtc          = $EndUtc.ToString('u')
         generatedAt     = $generatedAt
-        tenantId        = $tenant
         scopeText       = $scopeText
         totalUsers      = $totalUsers
         totalEvents     = $totalEvents
@@ -452,127 +444,288 @@ function Write-HtmlReport {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
-    --bg:#f5f6fa; --card:#fff; --ink:#1f2328; --muted:#5b6573;
-    --accent:#0f6cbd; --accent-2:#2899f5; --border:#e3e6ec;
-    --good:#107c10; --warn:#a47100;
-    --power:#0f6cbd; --regular:#2899f5; --casual:#7fb3e0; --onetime:#c5d8ec;
+    --bg:#f4f5f7;
+    --card:#ffffff;
+    --ink:#0b1320;
+    --ink-2:#283041;
+    --muted:#5a6473;
+    --muted-2:#8a93a3;
+    --border:#e5e8ee;
+    --border-2:#eef0f4;
+    --accent:#0f6cbd;
+    --accent-soft:#e8f0f9;
+    --shadow-sm:0 1px 2px rgba(15,23,42,.04), 0 1px 1px rgba(15,23,42,.02);
+    --shadow-md:0 1px 3px rgba(15,23,42,.05), 0 4px 16px rgba(15,23,42,.04);
+    --power:#0f4a82;
+    --regular:#2076c4;
+    --casual:#7eb1de;
+    --onetime:#c4d5e6;
+    --radius:10px;
+    --radius-sm:6px;
   }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-         color:var(--ink); background:var(--bg); }
-  header { background:linear-gradient(135deg,#0f6cbd 0%,#2899f5 100%); color:#fff;
-           padding:24px 32px; }
-  header h1 { margin:0 0 4px; font-size:22px; font-weight:600; letter-spacing:-.01em; }
-  header .sub { font-size:13px; opacity:.9; }
-  main { max-width:1280px; margin:0 auto; padding:24px 32px 64px; }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
-          gap:16px; margin-bottom:24px; }
-  .kpi { background:var(--card); border:1px solid var(--border); border-radius:8px;
-         padding:16px 20px; }
-  .kpi .label { font-size:12px; color:var(--muted); text-transform:uppercase;
-                letter-spacing:.04em; margin-bottom:6px; }
-  .kpi .value { font-size:26px; font-weight:600; letter-spacing:-.02em; }
-  .panel { background:var(--card); border:1px solid var(--border); border-radius:8px;
-           padding:20px 24px; margin-bottom:20px; }
-  .panel h2 { margin:0 0 12px; font-size:15px; font-weight:600; }
-  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-  @media (max-width:880px) { .grid-2 { grid-template-columns:1fr; } }
-  .controls { display:flex; gap:12px; align-items:center; margin-bottom:12px;
-              flex-wrap:wrap; }
-  .controls input[type=search] { flex:1; min-width:200px; padding:8px 12px;
-              border:1px solid var(--border); border-radius:6px; font:inherit; }
-  .controls .count { color:var(--muted); font-size:13px; }
-  .btn { padding:8px 12px; border:1px solid var(--border); background:#fff;
-         border-radius:6px; cursor:pointer; font:inherit; }
-  .btn:hover { background:#f5f8fc; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    font:14px/1.55 "Segoe UI Variable","Segoe UI",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink);
+    background:var(--bg);
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+  }
+  .accent-bar { height:4px; background:linear-gradient(90deg,#0f4a82 0%,#0f6cbd 50%,#2899f5 100%); }
+  header.report-head {
+    background:var(--card);
+    border-bottom:1px solid var(--border);
+    padding:32px 40px 28px;
+  }
+  header.report-head .inner { max-width:1280px; margin:0 auto; }
+  header.report-head .eyebrow {
+    font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent); margin-bottom:10px;
+  }
+  header.report-head h1 {
+    margin:0 0 6px; font-size:28px; font-weight:600; letter-spacing:-.015em;
+    color:var(--ink);
+  }
+  header.report-head .sub { font-size:13.5px; color:var(--muted); }
+  header.report-head .meta-strip {
+    margin-top:22px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:0; border-top:1px solid var(--border-2);
+  }
+  header.report-head .meta-strip .meta-item {
+    padding:14px 0 0; padding-right:24px;
+  }
+  header.report-head .meta-strip .meta-item + .meta-item { padding-left:24px; border-left:1px solid var(--border-2); }
+  header.report-head .meta-label {
+    font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted-2); margin-bottom:4px;
+  }
+  header.report-head .meta-value {
+    font-size:13px; color:var(--ink-2); font-variant-numeric:tabular-nums;
+  }
+  main { max-width:1280px; margin:0 auto; padding:28px 40px 64px; }
+  .section-label {
+    font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--muted-2); margin:24px 0 12px;
+  }
+  .section-label:first-child { margin-top:0; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; }
+  .kpi {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:var(--radius); padding:18px 22px 20px;
+    box-shadow:var(--shadow-sm); position:relative; overflow:hidden;
+  }
+  .kpi::before {
+    content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background:var(--accent); opacity:.85;
+  }
+  .kpi .label {
+    font-size:11px; font-weight:600; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.08em; margin-bottom:8px;
+  }
+  .kpi .value {
+    font-size:30px; font-weight:600; letter-spacing:-.02em;
+    color:var(--ink); font-variant-numeric:tabular-nums; line-height:1.1;
+  }
+  .kpi .sub { font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .panel {
+    background:var(--card); border:1px solid var(--border);
+    border-radius:var(--radius); padding:22px 26px;
+    box-shadow:var(--shadow-sm); margin-bottom:18px;
+  }
+  .panel-head {
+    display:flex; align-items:baseline; justify-content:space-between;
+    margin:0 0 16px; gap:16px; flex-wrap:wrap;
+  }
+  .panel-head h2 {
+    margin:0; font-size:15px; font-weight:600; color:var(--ink); letter-spacing:-.005em;
+  }
+  .panel-head .panel-sub { font-size:12px; color:var(--muted); }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px; }
+  @media (max-width:920px) { .grid-2 { grid-template-columns:1fr; } }
+  .controls {
+    display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;
+  }
+  .controls input[type=search] {
+    flex:1; min-width:220px; padding:9px 14px;
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    font:inherit; color:var(--ink); background:#fdfdfe;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .controls input[type=search]:focus {
+    outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(15,108,189,.12);
+  }
+  .controls .count {
+    color:var(--muted); font-size:12.5px; font-variant-numeric:tabular-nums;
+  }
+  .btn {
+    padding:9px 14px; border:1px solid var(--border); background:#fff;
+    border-radius:var(--radius-sm); cursor:pointer; font:inherit; font-size:13px;
+    color:var(--ink-2); font-weight:500; transition:background .15s, border-color .15s;
+  }
+  .btn:hover { background:var(--accent-soft); border-color:#cfdcec; color:var(--accent); }
+  .btn:focus-visible {
+    outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(15,108,189,.18);
+  }
+  .table-wrap {
+    max-height:600px; overflow:auto;
+    border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--card);
+  }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border);
-           vertical-align:top; }
-  th { font-weight:600; color:var(--muted); font-size:12px; text-transform:uppercase;
-       letter-spacing:.04em; cursor:pointer; user-select:none; position:sticky; top:0;
-       background:var(--card); }
+  th, td {
+    text-align:left; padding:11px 14px;
+    border-bottom:1px solid var(--border-2); vertical-align:middle;
+  }
+  th {
+    font-weight:600; color:var(--muted); font-size:11px;
+    text-transform:uppercase; letter-spacing:.06em;
+    cursor:pointer; user-select:none; position:sticky; top:0;
+    background:#fafbfc; z-index:1;
+    border-bottom:1px solid var(--border);
+  }
   th:hover { color:var(--ink); }
-  th.sorted::after { content:" \25BE"; color:var(--accent); }
+  th.sorted { color:var(--accent); }
+  th.sorted::after { content:" \25BE"; }
   th.sorted.asc::after { content:" \25B4"; }
-  tbody tr:hover { background:#fafbfc; }
-  td.num { text-align:right; font-variant-numeric: tabular-nums; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
-          background:#eef4fb; color:var(--accent); }
-  .pill.tier-Power   { background:#dbe9f7; color:#0f4a82; }
-  .pill.tier-Regular { background:#e8f1fa; color:#0f6cbd; }
-  .pill.tier-Casual  { background:#f2f6fb; color:#445a73; }
-  .pill.tier-OneTime { background:#fbf4e8; color:#a47100; }
-  .bar-chart { display:grid; gap:6px; }
-  .bar-row { display:grid; grid-template-columns:240px 1fr 80px;
-             gap:8px; align-items:center; font-size:12px; }
-  .bar-row .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .bar-row .num  { text-align:right; font-variant-numeric: tabular-nums; color:var(--muted); }
-  .bar { height:14px; background:linear-gradient(90deg,var(--accent),var(--accent-2));
-         border-radius:4px; }
+  tbody tr { transition:background .12s; }
+  tbody tr:nth-child(even) { background:#fbfcfd; }
+  tbody tr:hover { background:var(--accent-soft); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td .upn { font-family:"Segoe UI",sans-serif; color:var(--ink-2); }
+  .pill {
+    display:inline-block; padding:3px 10px; border-radius:999px;
+    font-size:11px; font-weight:600; letter-spacing:.02em;
+    line-height:1.5;
+  }
+  .pill.tier-Power   { background:#dde9f7; color:#0f4a82; }
+  .pill.tier-Regular { background:#e8f1fa; color:#1a5fa3; }
+  .pill.tier-Casual  { background:#eef3f9; color:#475a73; }
+  .pill.tier-OneTime { background:#f3f1ec; color:#7c6116; }
+  .bar-chart { display:grid; gap:10px; }
+  .bar-row {
+    display:grid; grid-template-columns:240px 1fr 90px;
+    gap:14px; align-items:center; font-size:12.5px;
+  }
+  .bar-row .name {
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    color:var(--ink-2);
+  }
+  .bar-row .num {
+    text-align:right; font-variant-numeric:tabular-nums;
+    color:var(--ink-2); font-weight:500;
+  }
+  .bar-track { background:var(--border-2); border-radius:999px; height:8px; overflow:hidden; }
+  .bar {
+    height:100%; background:var(--accent);
+    border-radius:999px; transition:width .3s ease-out;
+  }
   .bar.tier-Power   { background:var(--power); }
   .bar.tier-Regular { background:var(--regular); }
   .bar.tier-Casual  { background:var(--casual); }
   .bar.tier-OneTime { background:var(--onetime); }
-  footer { color:var(--muted); font-size:12px; margin-top:24px; line-height:1.6; }
-  footer .note { background:#fff8e6; border:1px solid #f1d99a; color:#7c5a17;
-                 padding:8px 12px; border-radius:6px; margin-bottom:8px; }
-  .muted { color:var(--muted); }
-  .empty { padding:40px; text-align:center; color:var(--muted); }
-  @media (max-width:640px) {
-    .bar-row { grid-template-columns:140px 1fr 60px; }
-    main { padding:16px; }
+  footer.report-foot {
+    color:var(--muted); font-size:12px; margin-top:32px; line-height:1.7;
+    border-top:1px solid var(--border-2); padding-top:18px;
+  }
+  footer .note {
+    display:flex; gap:10px; align-items:flex-start;
+    background:#fbf6e9; border:1px solid #ead9a9; color:#6b5418;
+    padding:11px 14px; border-radius:var(--radius-sm); margin-bottom:12px;
+    font-size:12.5px;
+  }
+  footer .note::before {
+    content:""; flex:0 0 14px; height:14px; margin-top:2px;
+    background:#b8901c; border-radius:50%;
+    -webkit-mask:radial-gradient(circle, transparent 4px, #000 4px) center/contain;
+            mask:radial-gradient(circle, transparent 4px, #000 4px) center/contain;
+  }
+  .empty { padding:40px; text-align:center; color:var(--muted); font-size:13px; }
+  @media (max-width:680px) {
+    header.report-head { padding:24px 20px 22px; }
+    main { padding:20px; }
+    .bar-row { grid-template-columns:140px 1fr 70px; }
+    header.report-head h1 { font-size:23px; }
+    header.report-head .meta-strip { grid-template-columns:1fr 1fr; }
+    header.report-head .meta-strip .meta-item + .meta-item { padding-left:16px; }
   }
   @media print {
     body { background:#fff; }
-    header { background:#0f6cbd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .accent-bar { background:#0f6cbd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    header.report-head { padding:16px 0 14px; }
     .panel, .kpi { break-inside:avoid; box-shadow:none; }
     .controls .btn, #csv-btn { display:none; }
-    main { max-width:none; padding:12px; }
+    main { max-width:none; padding:12px 0; }
     table { font-size:11px; }
     th { position:static; }
     .table-wrap { max-height:none !important; overflow:visible !important; border:none !important; }
+    tbody tr:hover { background:transparent; }
+    .kpi::before { background:#0f6cbd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
 </style>
 </head>
 <body>
-<header>
-  <h1>Copilot Chat Usage Report</h1>
-  <div class="sub" id="sub"></div>
+<div class="accent-bar"></div>
+<header class="report-head">
+  <div class="inner">
+    <div class="eyebrow">Microsoft 365 &middot; Copilot adoption</div>
+    <h1>Copilot Chat Usage Report</h1>
+    <div class="sub" id="sub"></div>
+    <div class="meta-strip" id="meta-strip"></div>
+  </div>
 </header>
 <main>
+  <div class="section-label">Overview</div>
   <section class="kpis">
-    <div class="kpi"><div class="label">Users</div><div class="value" id="kpi-users">0</div></div>
-    <div class="kpi"><div class="label">Total interactions</div><div class="value" id="kpi-events">0</div></div>
-    <div class="kpi"><div class="label">Avg / user</div><div class="value" id="kpi-avg">0</div></div>
-    <div class="kpi"><div class="label">Median / user</div><div class="value" id="kpi-median">0</div></div>
+    <div class="kpi"><div class="label">Active users</div><div class="value" id="kpi-users">0</div><div class="sub">in window</div></div>
+    <div class="kpi"><div class="label">Total interactions</div><div class="value" id="kpi-events">0</div><div class="sub">across all users</div></div>
+    <div class="kpi"><div class="label">Average / user</div><div class="value" id="kpi-avg">0</div><div class="sub">interactions</div></div>
+    <div class="kpi"><div class="label">Median / user</div><div class="value" id="kpi-median">0</div><div class="sub">interactions</div></div>
   </section>
 
+  <div class="section-label">Distribution</div>
   <section class="grid-2">
     <div class="panel">
-      <h2>Engagement tiers</h2>
+      <div class="panel-head">
+        <h2>Engagement tiers</h2>
+        <span class="panel-sub">users by activity level</span>
+      </div>
       <div class="bar-chart" id="tier-chart"></div>
     </div>
     <div class="panel">
-      <h2>App host distribution</h2>
+      <div class="panel-head">
+        <h2>App host distribution</h2>
+        <span class="panel-sub">users per surface</span>
+      </div>
       <div class="bar-chart" id="host-chart"></div>
       <div id="host-empty" class="empty" style="display:none">No app host data.</div>
     </div>
   </section>
 
+  <div class="section-label">Top users</div>
   <section class="panel">
-    <h2>Top 20 users by interaction count</h2>
+    <div class="panel-head">
+      <h2>Top 20 by interaction count</h2>
+      <span class="panel-sub">highest-volume Copilot Chat users in window</span>
+    </div>
     <div class="bar-chart" id="chart"></div>
     <div id="chart-empty" class="empty" style="display:none">No data.</div>
   </section>
 
+  <div class="section-label">Detail</div>
   <section class="panel">
-    <h2>All users</h2>
-    <div class="controls">
-      <input type="search" id="filter" placeholder="Filter by UPN, app host, department, tier...">
-      <span class="count" id="count"></span>
-      <button id="csv-btn" class="btn" type="button">Download CSV (filtered)</button>
+    <div class="panel-head">
+      <h2>All users</h2>
+      <span class="panel-sub">sortable, searchable, exportable</span>
     </div>
-    <div class="table-wrap" style="max-height:560px;overflow:auto;border:1px solid var(--border);border-radius:6px;">
+    <div class="controls">
+      <input type="search" id="filter" placeholder="Filter by UPN, app host, department, tier&hellip;">
+      <span class="count" id="count"></span>
+      <button id="csv-btn" class="btn" type="button">Download filtered CSV</button>
+    </div>
+    <div class="table-wrap">
       <table id="tbl">
         <thead>
           <tr>
@@ -592,7 +745,7 @@ function Write-HtmlReport {
     </div>
   </section>
 
-  <footer id="foot">
+  <footer class="report-foot" id="foot">
     <div class="note">
       Audit records can take up to ~30 minutes to surface. Activity in the last
       30 minutes of the window may be under-counted.
@@ -608,15 +761,24 @@ function Write-HtmlReport {
   const rows = (data.rows || []).slice();
 
   const fmt = n => (n==null) ? '' : Number(n).toLocaleString();
-  const subtitle = `${data.scopeText} - ${data.startUtc} -> ${data.endUtc} - Tenant ${data.tenantId}`;
-  document.getElementById('sub').textContent = subtitle;
+  document.getElementById('sub').textContent = data.scopeText;
+
+  // Meta strip in the header.
+  const metaItems = [
+    { label:'Reporting period', value:`${data.startUtc} → ${data.endUtc}` },
+    { label:'Generated', value:data.generatedAt },
+    { label:'Scope', value:data.includeLicensed ? 'Licensed + unlicensed' : 'Unlicensed only' },
+    { label:'Users in report', value:fmt(data.totalUsers) }
+  ];
+  function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  document.getElementById('meta-strip').innerHTML = metaItems.map(m =>
+    `<div class="meta-item"><div class="meta-label">${escapeHtml(m.label)}</div><div class="meta-value">${escapeHtml(m.value)}</div></div>`
+  ).join('');
 
   document.getElementById('kpi-users').textContent  = fmt(data.totalUsers);
   document.getElementById('kpi-events').textContent = fmt(data.totalEvents);
   document.getElementById('kpi-avg').textContent    = fmt(data.avgPerUser);
   document.getElementById('kpi-median').textContent = fmt(data.medianPerUser);
-
-  function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
   function renderBars(containerId, items, options){
     options = options || {};
@@ -629,7 +791,7 @@ function Write-HtmlReport {
       if (options.tierKey) { cls += ' tier-' + options.tierKey(i); }
       return `<div class="bar-row">` +
         `<div class="name" title="${escapeHtml(i.label)}">${escapeHtml(i.label)}</div>` +
-        `<div><div class="${cls}" style="width:${pct}%"></div></div>` +
+        `<div class="bar-track"><div class="${cls}" style="width:${pct}%"></div></div>` +
         `<div class="num">${fmt(i.count)}</div>` +
         `</div>`;
     }).join('');
@@ -692,7 +854,7 @@ function Write-HtmlReport {
     currentView = applyFilter();
     tbody.innerHTML = currentView.map(r => `
       <tr>
-        <td>${escapeHtml(r.UserPrincipalName||'')}</td>
+        <td><span class="upn">${escapeHtml(r.UserPrincipalName||'')}</span></td>
         <td>${tierBadge(r.EngagementTier)}</td>
         <td class="num">${fmt(r.InteractionCount)}</td>
         <td class="num">${fmt(r.ActiveDays)}</td>
@@ -736,7 +898,7 @@ function Write-HtmlReport {
   });
 
   document.getElementById('foot-text').textContent =
-    `Generated ${data.generatedAt} - ${fmt(rows.length)} users - ${fmt(data.totalEvents)} interactions`;
+    `Generated ${data.generatedAt} · ${fmt(rows.length)} users · ${fmt(data.totalEvents)} total interactions`;
 
   render();
 })();
@@ -870,8 +1032,7 @@ if (-not $NoHtml) {
                      -OutPath $HtmlPath `
                      -StartUtc $startUtc `
                      -EndUtc $endUtc `
-                     -IncludeLicensed:$IncludeLicensed `
-                     -RedactTenant:$RedactTenant
+                     -IncludeLicensed:$IncludeLicensed
 }
 
 Write-Host ""

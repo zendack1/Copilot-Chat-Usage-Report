@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-05
+
+### Changed
+- **HTML report visual refresh** — customer-ready styling: white header
+  with a thin accent strip, eyebrow / title / scope hierarchy, and a
+  metadata strip showing reporting period, generated timestamp, scope,
+  and user count. KPI tiles add a left-edge accent and a subtitle.
+  Bar charts now use a softer track + rounded fill. Tables get zebra
+  striping, a refined sticky header, and a hover state in the accent
+  color. Section labels (`Overview` / `Distribution` / `Top users` /
+  `Detail`) provide clearer hierarchy. Card shadows, focus rings on the
+  search input, and tighter typography throughout. All DOM ids and
+  `data-key` columns are unchanged.
+
+### Removed
+- **Tenant id is no longer embedded in the HTML report.** Previously the
+  subtitle showed `Tenant <guid>` (with `-RedactTenant` available as an
+  opt-in mask). Reports are now safe to share by default.
+- **`-RedactTenant` parameter removed** — redundant now that the tenant id
+  is never written into the report.
+
 ## [1.1.0] - 2026-05-05
 
 ### Added
@@ -20,8 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`-QueryTimeoutMinutes` parameter** (default 60): configurable wait for
   the Graph audit query to finish, so long-running queries on big tenants
   don't time out at a fixed boundary.
-- **`-RedactTenant` switch**: replaces the tenant id in the HTML subtitle
-  with `[redacted]` — safe to share screenshots externally.
 - **`-SkipDirectoryEnrichment` switch**: skip per-user `Get-MgUser` lookups.
   Faster on very large tenants at the cost of empty department / job-title /
   office columns.

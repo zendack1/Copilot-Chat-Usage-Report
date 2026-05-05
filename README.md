@@ -55,7 +55,6 @@ Default behavior: last 30 days, free Copilot Chat users only, both CSV and HTML 
 | `.\Get-CopilotChatUsage.ps1 -IncludeLicensed` | Include paid Copilot users in the output |
 | `.\Get-CopilotChatUsage.ps1 -NoHtml` | CSV only, skip the HTML report |
 | `.\Get-CopilotChatUsage.ps1 -OutputPath .\report.csv -HtmlPath .\report.html` | Custom file locations |
-| `.\Get-CopilotChatUsage.ps1 -RedactTenant` | Replace tenant id with `[redacted]` in the HTML — safe to share |
 | `.\Get-CopilotChatUsage.ps1 -SkipDirectoryEnrichment` | Skip per-user `Get-MgUser` lookups — faster on very large tenants but no department / job-title columns |
 | `.\Get-CopilotChatUsage.ps1 -CopilotSkuPattern '*Copilot*'` | Custom SKU match pattern (default `*Copilot*` covers all current Copilot SKUs) |
 | `.\Get-CopilotChatUsage.ps1 -QueryTimeoutMinutes 90` | Increase audit-query wait timeout (default 60 min) |
@@ -108,7 +107,7 @@ Use `-TestConnection` first to verify the registration before scheduling:
 - **Sortable / searchable table** with all enriched columns
 - **Filtered CSV download**: export the current filtered view as a separate CSV without re-running the script
 - **Print stylesheet**: prints cleanly to PDF / paper for distribution
-- **Tenant redaction** via `-RedactTenant` for screenshots and shared decks
+- **Safe to share**: the report carries no tenant id, customer name, or directory metadata beyond the filtered user list — paste a screenshot in a deck without redaction
 - **Hostile-input safe**: embedded JSON is escaped (`</` → `<\/`) so a UPN containing `</script>` cannot break out of the data block
 
 ## Tests

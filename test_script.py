@@ -124,9 +124,12 @@ check("Audit calls go through Invoke-GraphWithRetry",
 
 # ------------------------------------------------------------------ 3. Parameters
 for var in ("$Days", "$OutputPath", "$HtmlPath", "$IncludeLicensed", "$NoHtml",
-            "$CopilotSkuPattern", "$QueryTimeoutMinutes", "$RedactTenant",
+            "$CopilotSkuPattern", "$QueryTimeoutMinutes",
             "$TestConnection", "$SkipDirectoryEnrichment"):
     check(f"Main uses {var}", var in main_block, "")
+
+check("Tenant id no longer rendered in HTML subtitle",
+      "data.tenantId" not in src and "$RedactTenant" not in src)
 
 m_validate = re.search(r"\[ValidateSet\(\s*30\s*,\s*60\s*,\s*90\s*\)\]\s*\n\s*\[int\]\$Days", src)
 check("$Days parameter has ValidateSet(30, 60, 90)", bool(m_validate))
@@ -324,7 +327,6 @@ payload = {
     "startUtc": "2026-04-04 20:00:00Z",
     "endUtc":   "2026-05-04 20:00:00Z",
     "generatedAt": "2026-05-04 20:00:00Z",
-    "tenantId": "00000000-0000-0000-0000-aaaaaaaaaaaa",
     "scopeText": "Free / unlicensed Copilot Chat users only" if not INCLUDE_LICENSED
                   else "All Copilot Chat users (licensed and unlicensed)",
     "totalUsers": len(mock_rows),
