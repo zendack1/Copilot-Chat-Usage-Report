@@ -7,8 +7,8 @@ Each run produces:
 - a **CSV** with one row per user (UPN, interaction count, first/last use, surfaces used)
 - a **self-contained interactive HTML report** with KPI tiles, a Top-20 bar chart, and a sortable / searchable table — opens by double-clicking, no server, no internet, no dependencies
 
-![Copilot Chat usage report screenshot](examples/mock_report.html)
-*See [`examples/mock_report.html`](examples/mock_report.html) for a sample.*
+![Copilot Chat usage report screenshot](mock_report.html)
+*See [`mock_report.html`](mock_report.html) for a sample.*
 
 ---
 
