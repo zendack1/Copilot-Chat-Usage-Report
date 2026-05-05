@@ -39,7 +39,7 @@ It then cross-references each active user against assigned licenses and (by defa
 ## Quick start
 
 ```powershell
-git clone https://github.com/<your-handle>/copilot-chat-usage-report.git
+git clone https://github.com/zendack1/copilot-chat-usage-report.git
 cd copilot-chat-usage-report
 .\Get-CopilotChatUsage.ps1
 ```
